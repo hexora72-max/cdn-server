@@ -1,0 +1,13 @@
+{
+  "name": "cdn-storage-server",
+  "version": "1.0.0",
+  "description": "Simple CDN file upload and temporary storage server",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "multer": "^2.0.2"
+  }
+}
