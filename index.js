@@ -4,25 +4,24 @@ const path = require("path");
 const fs = require("fs");
 const axios = require("axios");
 const ffmpeg = require("fluent-ffmpeg");
+const ffmpegInstaller = require("@ffmpeg-installer/ffmpeg");
+
+// Auto-set FFmpeg Binary Path
+ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
 const app = express();
 const PORT = 4000;
 
-// JSON Data Receive කිරීමට
 app.use(express.json());
 
-// Uploads folder එක සෑදීම
 const uploadDir = path.join(__dirname, "uploads");
 if (!fs.existsSync(uploadDir)) {
     fs.mkdirSync(uploadDir);
 }
 
-// Direct Files Serve කිරීම
 app.use("/files", express.static(uploadDir));
 
-// ---------------------------------------------------------
-// 1. DIRECT FILE UPLOAD (Image, Audio, Video - 1GB Limit)
-// ---------------------------------------------------------
+// 1. Direct File Upload (Image, Audio, Video - 1GB Limit)
 const storage = multer.diskStorage({
     destination: (req, file, cb) => cb(null, "uploads/"),
     filename: (req, file, cb) => {
@@ -48,7 +47,7 @@ app.post("/upload", upload.single("file"), (req, res) => {
 
         const fileUrl = `${req.protocol}://${req.get("host")}/files/${req.file.filename}`;
         
-        // තත්පර 50න් Delete කිරීම
+        // Auto Delete in 50 Seconds
         setTimeout(() => {
             if (fs.existsSync(req.file.path)) {
                 fs.unlink(req.file.path, () => console.log(`Auto-deleted file: ${req.file.filename}`));
@@ -61,9 +60,7 @@ app.post("/upload", upload.single("file"), (req, res) => {
     }
 });
 
-// ---------------------------------------------------------
-// 2. PROCESS LINK FROM MAIN SERVER (Download & Convert)
-// ---------------------------------------------------------
+// 2. Process Link From Main Server (Download, FFmpeg Convert & Serve)
 app.post("/process-link", async (req, res) => {
     const { downloadUrl } = req.body;
     
@@ -77,7 +74,7 @@ app.post("/process-link", async (req, res) => {
     const finalFilePath = path.join(uploadDir, finalFileName);
 
     try {
-        // Step A: URL එකෙන් වීඩියෝව Download කරගැනීම
+        // Download Video
         const writer = fs.createWriteStream(inputFilePath);
         const response = await axios({ url: downloadUrl, method: 'GET', responseType: 'stream' });
         response.data.pipe(writer);
@@ -86,7 +83,7 @@ app.post("/process-link", async (req, res) => {
             writer.on('error', reject);
         });
 
-        // Step B: FFmpeg මගින් Convert කිරීම
+        // Convert with FFmpeg
         await new Promise((resolve, reject) => {
             ffmpeg(inputFilePath)
                 .output(finalFilePath)
@@ -97,10 +94,10 @@ app.post("/process-link", async (req, res) => {
                 .run();
         });
 
-        // Step C: Input File එක මකා දැමීම
+        // Cleanup Input File
         if (fs.existsSync(inputFilePath)) fs.unlinkSync(inputFilePath);
 
-        // Step D: තත්පර 50න් Output File එක Delete වීමට සැකසීම
+        // Auto Delete Converted File in 50 Seconds
         setTimeout(() => {
             if (fs.existsSync(finalFilePath)) {
                 fs.unlink(finalFilePath, () => console.log(`Auto-deleted converted video: ${finalFileName}`));
@@ -108,8 +105,6 @@ app.post("/process-link", async (req, res) => {
         }, 50000);
 
         const fileUrl = `${req.protocol}://${req.get("host")}/files/${finalFileName}`;
-        
-        // Main Server එකට Link එක යැවීම
         res.json({ status: true, url: fileUrl, expires_in: "50s" });
 
     } catch (error) {
