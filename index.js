@@ -6,6 +6,13 @@ const app = express();
 
 const PORT = Number(process.env.PORT) || 3000;
 
+let model = null;
+let processor = null;
+
+let modelReady = false;
+let modelLoading = false;
+let modelError = null;
+
 const upload = multer({
     storage: multer.memoryStorage(),
     limits: {
@@ -13,45 +20,30 @@ const upload = multer({
     }
 });
 
-let model = null;
-let processor = null;
-
-let modelReady = false;
-let modelError = null;
-let loading = false;
-
 
 /* =========================================================
-   LOAD MODEL
+   LOAD BIREfNET
 ========================================================= */
 
 async function loadModel() {
 
-    if (modelReady) {
+    if (modelReady || modelLoading) {
         return;
     }
 
-    if (loading) {
-        return;
-    }
-
-    loading = true;
+    modelLoading = true;
     modelError = null;
 
     try {
 
-        console.log(
-            "Loading Transformers.js..."
-        );
+        console.log("Loading Transformers.js...");
 
         const {
             AutoModel,
             AutoProcessor
-        } = await import(
-            "@huggingface/transformers"
-        );
+        } = await import("@huggingface/transformers");
 
-        const MODEL =
+        const modelName =
             "onnx-community/BiRefNet-ONNX";
 
         console.log(
@@ -60,7 +52,7 @@ async function loadModel() {
 
         processor =
             await AutoProcessor.from_pretrained(
-                MODEL
+                modelName
             );
 
         console.log(
@@ -69,7 +61,7 @@ async function loadModel() {
 
         model =
             await AutoModel.from_pretrained(
-                MODEL,
+                modelName,
                 {
                     dtype: "fp32"
                 }
@@ -82,7 +74,7 @@ async function loadModel() {
         );
 
         console.log(
-            "BiRefNet READY"
+            "BiRefNet loaded successfully"
         );
 
         console.log(
@@ -98,7 +90,7 @@ async function loadModel() {
             String(error);
 
         console.error(
-            "MODEL ERROR:"
+            "BiRefNet loading failed:"
         );
 
         console.error(
@@ -107,7 +99,7 @@ async function loadModel() {
 
     } finally {
 
-        loading = false;
+        modelLoading = false;
     }
 }
 
@@ -117,14 +109,14 @@ async function loadModel() {
 ========================================================= */
 
 async function removeBackground(
-    buffer
+    inputBuffer
 ) {
 
     if (!modelReady) {
 
         throw new Error(
             modelError ||
-            "BiRefNet model is still loading."
+            "BiRefNet is still loading."
         );
     }
 
@@ -136,7 +128,7 @@ async function removeBackground(
 
     const image =
         await RawImage.read(
-            buffer
+            inputBuffer
         );
 
     const originalWidth =
@@ -146,7 +138,7 @@ async function removeBackground(
         image.height;
 
     console.log(
-        "Input:",
+        "Image:",
         originalWidth,
         "x",
         originalHeight
@@ -157,25 +149,49 @@ async function removeBackground(
             image
         );
 
-    const output =
+    const result =
         await model(
             inputs
         );
 
-    if (!output) {
+    console.log(
+        "Model output:",
+        Object.keys(result)
+    );
 
-        throw new Error(
-            "BiRefNet returned no output."
-        );
+    /*
+     * BiRefNet output can differ
+     * between model versions.
+     */
+
+    let maskTensor = null;
+
+    if (result.output_image) {
+
+        maskTensor =
+            result.output_image;
+
+    } else if (result.logits) {
+
+        maskTensor =
+            result.logits;
+
+    } else {
+
+        const keys =
+            Object.keys(result);
+
+        if (keys.length > 0) {
+
+            maskTensor =
+                result[keys[0]];
+        }
     }
-
-    let maskTensor =
-        output.output_image;
 
     if (!maskTensor) {
 
         throw new Error(
-            "BiRefNet output_image not found."
+            "Could not find BiRefNet mask output."
         );
     }
 
@@ -187,38 +203,63 @@ async function removeBackground(
             maskTensor[0];
     }
 
-    let mask =
-        RawImage.fromTensor(
-            maskTensor
+    let mask;
+
+    try {
+
+        mask =
+            RawImage.fromTensor(
+                maskTensor
+            );
+
+    } catch (error) {
+
+        console.error(
+            "Tensor conversion error:",
+            error
         );
 
+        throw new Error(
+            "Could not convert BiRefNet output to mask."
+        );
+    }
+
     /*
-     * Convert model output
-     * to alpha mask.
+     * Convert model mask values
+     * into 0-255 alpha values.
      */
 
-    const data =
+    const maskData =
         mask.data;
 
     for (
         let i = 0;
-        i < data.length;
+        i < maskData.length;
         i++
     ) {
 
         let value =
-            Number(data[i]);
+            Number(
+                maskData[i]
+            );
 
         /*
-         * sigmoid
+         * If output is already 0-1,
+         * don't apply sigmoid.
          */
 
-        value =
-            1 /
-            (
-                1 +
-                Math.exp(-value)
-            );
+        if (
+            value < 0 ||
+            value > 1
+        ) {
+
+            value =
+                1 /
+                (
+                    1 +
+                    Math.exp(-value)
+                );
+        }
 
         value =
             Math.max(
@@ -229,7 +270,7 @@ async function removeBackground(
                 )
             );
 
-        data[i] =
+        maskData[i] =
             Math.round(
                 value * 255
             );
@@ -255,17 +296,21 @@ async function removeBackground(
      */
 
     const original =
-        await sharp(buffer)
+        await sharp(
+            inputBuffer
+        )
             .rotate()
             .ensureAlpha()
             .toBuffer();
 
     /*
-     * Apply mask as alpha.
+     * Apply mask as alpha channel.
      */
 
     const output =
-        await sharp(original)
+        await sharp(
+            original
+        )
             .joinChannel(
                 maskPng,
                 {
@@ -296,9 +341,12 @@ app.get(
         res.json({
             status: true,
             server: true,
-            modelLoaded: modelReady,
-            loading: loading,
-            error: modelError
+            modelLoaded:
+                modelReady,
+            modelLoading:
+                modelLoading,
+            modelError:
+                modelError
         });
 
     }
@@ -313,7 +361,7 @@ app.get(
     "/",
     (req, res) => {
 
-        res.type("html").send(`
+        res.send(`
 <!DOCTYPE html>
 
 <html>
@@ -377,8 +425,8 @@ button {
     border-radius: 10px;
     background: white;
     color: black;
-    font-weight: bold;
     font-size: 16px;
+    font-weight: bold;
 }
 
 button:disabled {
@@ -394,7 +442,38 @@ button:disabled {
     width: 100%;
     margin-top: 20px;
     border-radius: 10px;
-    background: white;
+
+    background-color: white;
+
+    background-image:
+        linear-gradient(
+            45deg,
+            #ccc 25%,
+            transparent 25%
+        ),
+        linear-gradient(
+            -45deg,
+            #ccc 25%,
+            transparent 25%
+        ),
+        linear-gradient(
+            45deg,
+            transparent 75%,
+            #ccc 75%
+        ),
+        linear-gradient(
+            -45deg,
+            transparent 75%,
+            #ccc 75%
+        );
+
+    background-size: 20px 20px;
+
+    background-position:
+        0 0,
+        0 10px,
+        10px -10px,
+        -10px 0;
 }
 
 #download {
@@ -410,7 +489,7 @@ button:disabled {
 }
 
 .hidden {
-    display: none;
+    display: none !important;
 }
 
 </style>
@@ -428,7 +507,7 @@ BiRefNet
 </h1>
 
 <p>
-Remove image background automatically.
+AI Background Remover
 </p>
 
 <form id="form">
@@ -450,7 +529,7 @@ Remove Background
 </form>
 
 <p id="status">
-Checking model...
+Loading AI model...
 </p>
 
 <img
@@ -469,7 +548,6 @@ Download PNG
 </div>
 
 </div>
-
 
 <script>
 
@@ -497,44 +575,66 @@ async function checkModel() {
     try {
 
         const response =
-        await fetch("/health");
+            await fetch(
+                "/health"
+            );
 
         const data =
-        await response.json();
+            await response.json();
 
         if (
             data.modelLoaded
         ) {
 
             status.textContent =
-            "Ready.";
+                "Ready.";
 
-        } else if (
-            data.loading
+            return;
+        }
+
+        if (
+            data.modelLoading
         ) {
 
             status.textContent =
-            "AI model is loading. Please wait...";
+                "AI model loading...";
 
             setTimeout(
                 checkModel,
                 3000
             );
 
-        } else {
+            return;
+        }
+
+        if (
+            data.modelError
+        ) {
 
             status.textContent =
-            "Model error: " +
-            (
-                data.error ||
-                "Unknown error"
+                "Model error: " +
+                data.modelError;
+
+            setTimeout(
+                checkModel,
+                5000
             );
+
+            return;
         }
+
+        status.textContent =
+            "Starting AI model...";
+
+        setTimeout(
+            checkModel,
+            3000
+        );
 
     } catch (error) {
 
         status.textContent =
-        "Server error.";
+            "Checking server...";
 
         setTimeout(
             checkModel,
@@ -545,103 +645,103 @@ async function checkModel() {
 
 
 form.addEventListener(
-"submit",
-async event => {
+    "submit",
+    async event => {
 
-    event.preventDefault();
+        event.preventDefault();
 
-    const file =
-    input.files[0];
+        const file =
+            input.files[0];
 
-    if (!file) {
-        return;
-    }
-
-    button.disabled =
-    true;
-
-    result.classList.add(
-        "hidden"
-    );
-
-    download.classList.add(
-        "hidden"
-    );
-
-    status.textContent =
-    "Removing background...";
-
-
-    try {
-
-        const formData =
-        new FormData();
-
-        formData.append(
-            "image",
-            file
-        );
-
-        const response =
-        await fetch(
-            "/remove-bg",
-            {
-                method: "POST",
-                body: formData
-            }
-        );
-
-        if (!response.ok) {
-
-            const text =
-            await response.text();
-
-            throw new Error(
-                text
-            );
+        if (!file) {
+            return;
         }
 
-        const blob =
-        await response.blob();
-
-        const url =
-        URL.createObjectURL(
-            blob
-        );
-
-        result.src =
-        url;
-
-        result.classList.remove(
-            "hidden"
-        );
-
-        download.href =
-        url;
-
-        download.classList.remove(
-            "hidden"
-        );
-
-        status.textContent =
-        "Background removed successfully.";
-
-    } catch (error) {
-
-        console.error(
-            error
-        );
-
-        status.textContent =
-        error.message;
-
-    } finally {
-
         button.disabled =
-        false;
-    }
+            true;
 
-});
+        status.textContent =
+            "Removing background...";
+
+        result.classList.add(
+            "hidden"
+        );
+
+        download.classList.add(
+            "hidden"
+        );
+
+        try {
+
+            const formData =
+                new FormData();
+
+            formData.append(
+                "image",
+                file
+            );
+
+            const response =
+                await fetch(
+                    "/remove-bg",
+                    {
+                        method:
+                            "POST",
+                        body:
+                            formData
+                    }
+                );
+
+            if (!response.ok) {
+
+                const text =
+                    await response.text();
+
+                throw new Error(
+                    text
+                );
+            }
+
+            const blob =
+                await response.blob();
+
+            const url =
+                URL.createObjectURL(
+                    blob
+                );
+
+            result.src =
+                url;
+
+            result.classList.remove(
+                "hidden"
+            );
+
+            download.href =
+                url;
+
+            download.classList.remove(
+                "hidden"
+            );
+
+            status.textContent =
+                "Background removed successfully.";
+
+        } catch (error) {
+
+            console.error(error);
+
+            status.textContent =
+                "Error: " +
+                error.message;
+
+        } finally {
+
+            button.disabled =
+                false;
+        }
+    }
+);
 
 
 checkModel();
@@ -658,7 +758,7 @@ checkModel();
 
 
 /* =========================================================
-   REMOVE BG API
+   REMOVE BACKGROUND API
 ========================================================= */
 
 app.post(
@@ -672,34 +772,30 @@ app.post(
             if (!req.file) {
 
                 return res
-                .status(400)
-                .json({
-                    status: false,
-                    error:
-                        "Image is required."
-                });
+                    .status(400)
+                    .json({
+                        status: false,
+                        error:
+                            "Image is required."
+                    });
             }
 
             if (!modelReady) {
 
                 return res
-                .status(503)
-                .json({
-                    status: false,
-                    error:
-                        modelError ||
-                        "BiRefNet is still loading. Try again."
-                });
+                    .status(503)
+                    .json({
+                        status: false,
+                        error:
+                            modelError ||
+                            "AI model is still loading. Try again."
+                    });
             }
 
-            console.log(
-                "Processing image..."
-            );
-
             const output =
-            await removeBackground(
-                req.file.buffer
-            );
+                await removeBackground(
+                    req.file.buffer
+                );
 
             res.setHeader(
                 "Content-Type",
@@ -718,24 +814,22 @@ app.post(
         } catch (error) {
 
             console.error(
-                "REMOVE BG ERROR:"
+                "Background removal error:"
             );
 
             console.error(
                 error
             );
 
-            if (
-                !res.headersSent
-            ) {
+            if (!res.headersSent) {
 
                 res
-                .status(500)
-                .json({
-                    status: false,
-                    error:
-                        error.message
-                });
+                    .status(500)
+                    .json({
+                        status: false,
+                        error:
+                            error.message
+                    });
             }
         }
     }
@@ -743,7 +837,7 @@ app.post(
 
 
 /* =========================================================
-   START SERVER FIRST
+   START SERVER
 ========================================================= */
 
 app.listen(
@@ -760,7 +854,8 @@ app.listen(
         );
 
         console.log(
-            `PORT: ${PORT}`
+            "PORT:",
+            PORT
         );
 
         console.log(
@@ -768,9 +863,8 @@ app.listen(
         );
 
         /*
-         * IMPORTANT:
-         * Do NOT await model here.
-         * Railway gets the port immediately.
+         * Start model loading after
+         * Railway has a listening port.
          */
 
         loadModel();
