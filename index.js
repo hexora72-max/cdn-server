@@ -1,873 +1,143 @@
-const express = require("express");
-const multer = require("multer");
-const sharp = require("sharp");
+const express = require('express');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
 
 const app = express();
+app.use(express.json());
 
-const PORT = Number(process.env.PORT) || 3000;
+const rmbgDir = path.join(__dirname, 'rmbg');
+if (!fs.existsSync(rmbgDir)) {
+    fs.mkdirSync(rmbgDir);
+}
 
-let model = null;
-let processor = null;
+app.use('/rmbg', express.static(rmbgDir));
 
-let modelReady = false;
-let modelLoading = false;
-let modelError = null;
+app.all('/api/remove-bg', async (req, res) => {
+    let imageUrl = '';
 
-const upload = multer({
-    storage: multer.memoryStorage(),
-    limits: {
-        fileSize: 20 * 1024 * 1024
+    if (req.query && req.query.url) {
+        const urlStartIndex = req.originalUrl.indexOf('url=') + 4;
+        imageUrl = req.originalUrl.substring(urlStartIndex);
+        imageUrl = decodeURIComponent(imageUrl);
+    } 
+    else if (req.body && req.body.url) {
+        imageUrl = req.body.url;
+    }
+
+    if (!imageUrl) {
+        return res.status(400).json({ 
+            status: false, 
+            owner: "@KingPoddaModz", 
+            error: "Please provide an image url" 
+        });
+    }
+
+    try {
+        const hostUrl = `${req.protocol}://${req.get('host')}`;
+        const finalUrl = await processAndSaveImage(imageUrl, hostUrl);
+        
+        if (finalUrl) {
+            res.json({ 
+                status: true, 
+                owner: "@KingPoddaModz",
+                url: finalUrl 
+            });
+        } else {
+            res.status(500).json({ 
+                status: false, 
+                owner: "@KingPoddaModz",
+                error: "Failed to process image" 
+            });
+        }
+    } catch (error) {
+        res.status(500).json({ 
+            status: false, 
+            owner: "@KingPoddaModz",
+            error: error.message 
+        });
     }
 });
 
-
-/* =========================================================
-   LOAD BIREfNET
-========================================================= */
-
-async function loadModel() {
-
-    if (modelReady || modelLoading) {
-        return;
-    }
-
-    modelLoading = true;
-    modelError = null;
+async function processAndSaveImage(imageUrl, hostUrl) {
+    const sessionHash = crypto.randomBytes(5).toString('hex');
+    const baseUrl = 'https://briaai-bria-rmbg-1-4.hf.space';
 
     try {
+        const sourceImageRes = await fetch(imageUrl);
+        if (!sourceImageRes.ok) throw new Error("Could not fetch the source image");
+        
+        const imageBlob = await sourceImageRes.blob();
+        
+        const formData = new FormData();
+        formData.append('files', imageBlob, 'image.jpg');
 
-        console.log("Loading Transformers.js...");
-
-        const {
-            AutoModel,
-            AutoProcessor
-        } = await import("@huggingface/transformers");
-
-        const modelName =
-            "onnx-community/BiRefNet-ONNX";
-
-        console.log(
-            "Loading processor..."
-        );
-
-        processor =
-            await AutoProcessor.from_pretrained(
-                modelName
-            );
-
-        console.log(
-            "Loading BiRefNet model..."
-        );
-
-        model =
-            await AutoModel.from_pretrained(
-                modelName,
-                {
-                    dtype: "fp32"
-                }
-            );
-
-        modelReady = true;
-
-        console.log(
-            "================================"
-        );
-
-        console.log(
-            "BiRefNet loaded successfully"
-        );
-
-        console.log(
-            "================================"
-        );
-
-    } catch (error) {
-
-        modelReady = false;
-
-        modelError =
-            error?.message ||
-            String(error);
-
-        console.error(
-            "BiRefNet loading failed:"
-        );
-
-        console.error(
-            error
-        );
-
-    } finally {
-
-        modelLoading = false;
-    }
-}
-
-
-/* =========================================================
-   REMOVE BACKGROUND
-========================================================= */
-
-async function removeBackground(
-    inputBuffer
-) {
-
-    if (!modelReady) {
-
-        throw new Error(
-            modelError ||
-            "BiRefNet is still loading."
-        );
-    }
-
-    const {
-        RawImage
-    } = await import(
-        "@huggingface/transformers"
-    );
-
-    const image =
-        await RawImage.read(
-            inputBuffer
-        );
-
-    const originalWidth =
-        image.width;
-
-    const originalHeight =
-        image.height;
-
-    console.log(
-        "Image:",
-        originalWidth,
-        "x",
-        originalHeight
-    );
-
-    const inputs =
-        await processor(
-            image
-        );
-
-    const result =
-        await model(
-            inputs
-        );
-
-    console.log(
-        "Model output:",
-        Object.keys(result)
-    );
-
-    /*
-     * BiRefNet output can differ
-     * between model versions.
-     */
-
-    let maskTensor = null;
-
-    if (result.output_image) {
-
-        maskTensor =
-            result.output_image;
-
-    } else if (result.logits) {
-
-        maskTensor =
-            result.logits;
-
-    } else {
-
-        const keys =
-            Object.keys(result);
-
-        if (keys.length > 0) {
-
-            maskTensor =
-                result[keys[0]];
-        }
-    }
-
-    if (!maskTensor) {
-
-        throw new Error(
-            "Could not find BiRefNet mask output."
-        );
-    }
-
-    if (
-        Array.isArray(maskTensor)
-    ) {
-
-        maskTensor =
-            maskTensor[0];
-    }
-
-    let mask;
-
-    try {
-
-        mask =
-            RawImage.fromTensor(
-                maskTensor
-            );
-
-    } catch (error) {
-
-        console.error(
-            "Tensor conversion error:",
-            error
-        );
-
-        throw new Error(
-            "Could not convert BiRefNet output to mask."
-        );
-    }
-
-    /*
-     * Convert model mask values
-     * into 0-255 alpha values.
-     */
-
-    const maskData =
-        mask.data;
-
-    for (
-        let i = 0;
-        i < maskData.length;
-        i++
-    ) {
-
-        let value =
-            Number(
-                maskData[i]
-            );
-
-        /*
-         * If output is already 0-1,
-         * don't apply sigmoid.
-         */
-
-        if (
-            value < 0 ||
-            value > 1
-        ) {
-
-            value =
-                1 /
-                (
-                    1 +
-                    Math.exp(-value)
-                );
+        const uploadRes = await fetch(`${baseUrl}/upload`, { method: 'POST', body: formData });
+        const uploadData = await uploadRes.json();
+        
+        let serverFilePath;
+        if (Array.isArray(uploadData)) {
+            serverFilePath = typeof uploadData[0] === 'string' ? uploadData[0] : (uploadData[0].name || uploadData[0].path);
+        } else {
+            serverFilePath = uploadData.name || uploadData.path || uploadData;
         }
 
-        value =
-            Math.max(
-                0,
-                Math.min(
-                    1,
-                    value
-                )
-            );
+        if (!serverFilePath || serverFilePath === 'undefined') return null;
 
-        maskData[i] =
-            Math.round(
-                value * 255
-            );
-    }
-
-    /*
-     * Convert mask to PNG.
-     */
-
-    const maskPng =
-        await mask
-            .convert(1)
-            .resize(
-                originalWidth,
-                originalHeight
-            )
-            .toSharp()
-            .png()
-            .toBuffer();
-
-    /*
-     * Original image.
-     */
-
-    const original =
-        await sharp(
-            inputBuffer
-        )
-            .rotate()
-            .ensureAlpha()
-            .toBuffer();
-
-    /*
-     * Apply mask as alpha channel.
-     */
-
-    const output =
-        await sharp(
-            original
-        )
-            .joinChannel(
-                maskPng,
-                {
-                    raw: {
-                        width:
-                            originalWidth,
-                        height:
-                            originalHeight,
-                        channels: 1
-                    }
-                }
-            )
-            .png()
-            .toBuffer();
-
-    return output;
-}
-
-
-/* =========================================================
-   HEALTH
-========================================================= */
-
-app.get(
-    "/health",
-    (req, res) => {
-
-        res.json({
-            status: true,
-            server: true,
-            modelLoaded:
-                modelReady,
-            modelLoading:
-                modelLoading,
-            modelError:
-                modelError
+        await fetch(`${baseUrl}/queue/join`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ data: [{ path: serverFilePath }], fn_index: 0, session_hash: sessionHash })
         });
 
-    }
-);
+        const eventRes = await fetch(`${baseUrl}/queue/data?session_hash=${sessionHash}`);
+        const reader = eventRes.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        let outputImageUrl = null;
 
-
-/* =========================================================
-   HOME
-========================================================= */
-
-app.get(
-    "/",
-    (req, res) => {
-
-        res.send(`
-<!DOCTYPE html>
-
-<html>
-
-<head>
-
-<meta charset="UTF-8">
-
-<meta
-name="viewport"
-content="width=device-width,initial-scale=1"
->
-
-<title>
-BiRefNet Background Remover
-</title>
-
-<style>
-
-* {
-    box-sizing: border-box;
-}
-
-body {
-    margin: 0;
-    padding: 25px;
-    background: #111;
-    color: white;
-    font-family: Arial;
-}
-
-.container {
-    max-width: 700px;
-    margin: auto;
-}
-
-.card {
-    background: #222;
-    padding: 25px;
-    border-radius: 18px;
-}
-
-h1 {
-    text-align: center;
-}
-
-input {
-    width: 100%;
-    padding: 15px;
-    margin-top: 15px;
-    border-radius: 10px;
-    background: #333;
-    color: white;
-}
-
-button {
-    width: 100%;
-    padding: 15px;
-    margin-top: 15px;
-    border: 0;
-    border-radius: 10px;
-    background: white;
-    color: black;
-    font-size: 16px;
-    font-weight: bold;
-}
-
-button:disabled {
-    opacity: .5;
-}
-
-#status {
-    text-align: center;
-    margin-top: 20px;
-}
-
-#result {
-    width: 100%;
-    margin-top: 20px;
-    border-radius: 10px;
-
-    background-color: white;
-
-    background-image:
-        linear-gradient(
-            45deg,
-            #ccc 25%,
-            transparent 25%
-        ),
-        linear-gradient(
-            -45deg,
-            #ccc 25%,
-            transparent 25%
-        ),
-        linear-gradient(
-            45deg,
-            transparent 75%,
-            #ccc 75%
-        ),
-        linear-gradient(
-            -45deg,
-            transparent 75%,
-            #ccc 75%
-        );
-
-    background-size: 20px 20px;
-
-    background-position:
-        0 0,
-        0 10px,
-        10px -10px,
-        -10px 0;
-}
-
-#download {
-    display: block;
-    margin-top: 20px;
-    padding: 15px;
-    text-align: center;
-    background: white;
-    color: black;
-    border-radius: 10px;
-    text-decoration: none;
-    font-weight: bold;
-}
-
-.hidden {
-    display: none !important;
-}
-
-</style>
-
-</head>
-
-<body>
-
-<div class="container">
-
-<div class="card">
-
-<h1>
-BiRefNet
-</h1>
-
-<p>
-AI Background Remover
-</p>
-
-<form id="form">
-
-<input
-id="image"
-type="file"
-accept="image/*"
-required
->
-
-<button
-id="button"
-type="submit"
->
-Remove Background
-</button>
-
-</form>
-
-<p id="status">
-Loading AI model...
-</p>
-
-<img
-id="result"
-class="hidden"
->
-
-<a
-id="download"
-class="hidden"
-download="removed-background.png"
->
-Download PNG
-</a>
-
-</div>
-
-</div>
-
-<script>
-
-const form =
-document.getElementById("form");
-
-const input =
-document.getElementById("image");
-
-const button =
-document.getElementById("button");
-
-const status =
-document.getElementById("status");
-
-const result =
-document.getElementById("result");
-
-const download =
-document.getElementById("download");
-
-
-async function checkModel() {
-
-    try {
-
-        const response =
-            await fetch(
-                "/health"
-            );
-
-        const data =
-            await response.json();
-
-        if (
-            data.modelLoaded
-        ) {
-
-            status.textContent =
-                "Ready.";
-
-            return;
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            
+            const events = decoder.decode(value).split('\n\n'); 
+            for (const event of events) {
+                if (event.startsWith('data: ')) {
+                    try {
+                        const parsed = JSON.parse(event.replace('data: ', ''));
+                        if (parsed.msg === 'process_completed' && parsed.success) {
+                            const outData = parsed.output.data[0];
+                            outputImageUrl = typeof outData === 'string' ? outData : (outData.url || `${baseUrl}/file=${outData.path || outData.name}`);
+                            if (!outputImageUrl.startsWith('http')) outputImageUrl = `${baseUrl}${outputImageUrl}`;
+                            break;
+                        }
+                    } catch (e) {}
+                }
+            }
+            if (outputImageUrl) break;
         }
 
-        if (
-            data.modelLoading
-        ) {
-
-            status.textContent =
-                "AI model loading...";
-
-            setTimeout(
-                checkModel,
-                3000
-            );
-
-            return;
+        if (outputImageUrl) {
+            const imgRes = await fetch(outputImageUrl);
+            const arrayBuffer = await imgRes.arrayBuffer();
+            
+            const fileName = `result-${Date.now()}.png`;
+            const savePath = path.join(__dirname, 'rmbg', fileName);
+            
+            fs.writeFileSync(savePath, Buffer.from(arrayBuffer));
+            
+            setTimeout(() => {
+                fs.unlink(savePath, (err) => {});
+            }, 60000);
+            
+            return `${hostUrl}/rmbg/${fileName}`;
         }
-
-        if (
-            data.modelError
-        ) {
-
-            status.textContent =
-                "Model error: " +
-                data.modelError;
-
-            setTimeout(
-                checkModel,
-                5000
-            );
-
-            return;
-        }
-
-        status.textContent =
-            "Starting AI model...";
-
-        setTimeout(
-            checkModel,
-            3000
-        );
 
     } catch (error) {
-
-        status.textContent =
-            "Checking server...";
-
-        setTimeout(
-            checkModel,
-            3000
-        );
+        return null;
     }
 }
 
-
-form.addEventListener(
-    "submit",
-    async event => {
-
-        event.preventDefault();
-
-        const file =
-            input.files[0];
-
-        if (!file) {
-            return;
-        }
-
-        button.disabled =
-            true;
-
-        status.textContent =
-            "Removing background...";
-
-        result.classList.add(
-            "hidden"
-        );
-
-        download.classList.add(
-            "hidden"
-        );
-
-        try {
-
-            const formData =
-                new FormData();
-
-            formData.append(
-                "image",
-                file
-            );
-
-            const response =
-                await fetch(
-                    "/remove-bg",
-                    {
-                        method:
-                            "POST",
-                        body:
-                            formData
-                    }
-                );
-
-            if (!response.ok) {
-
-                const text =
-                    await response.text();
-
-                throw new Error(
-                    text
-                );
-            }
-
-            const blob =
-                await response.blob();
-
-            const url =
-                URL.createObjectURL(
-                    blob
-                );
-
-            result.src =
-                url;
-
-            result.classList.remove(
-                "hidden"
-            );
-
-            download.href =
-                url;
-
-            download.classList.remove(
-                "hidden"
-            );
-
-            status.textContent =
-                "Background removed successfully.";
-
-        } catch (error) {
-
-            console.error(error);
-
-            status.textContent =
-                "Error: " +
-                error.message;
-
-        } finally {
-
-            button.disabled =
-                false;
-        }
-    }
-);
-
-
-checkModel();
-
-</script>
-
-</body>
-
-</html>
-        `);
-
-    }
-);
-
-
-/* =========================================================
-   REMOVE BACKGROUND API
-========================================================= */
-
-app.post(
-    "/remove-bg",
-    upload.single("image"),
-
-    async (req, res) => {
-
-        try {
-
-            if (!req.file) {
-
-                return res
-                    .status(400)
-                    .json({
-                        status: false,
-                        error:
-                            "Image is required."
-                    });
-            }
-
-            if (!modelReady) {
-
-                return res
-                    .status(503)
-                    .json({
-                        status: false,
-                        error:
-                            modelError ||
-                            "AI model is still loading. Try again."
-                    });
-            }
-
-            const output =
-                await removeBackground(
-                    req.file.buffer
-                );
-
-            res.setHeader(
-                "Content-Type",
-                "image/png"
-            );
-
-            res.setHeader(
-                "Content-Disposition",
-                'inline; filename="removed-background.png"'
-            );
-
-            res.end(
-                output
-            );
-
-        } catch (error) {
-
-            console.error(
-                "Background removal error:"
-            );
-
-            console.error(
-                error
-            );
-
-            if (!res.headersSent) {
-
-                res
-                    .status(500)
-                    .json({
-                        status: false,
-                        error:
-                            error.message
-                    });
-            }
-        }
-    }
-);
-
-
-/* =========================================================
-   START SERVER
-========================================================= */
-
-app.listen(
-    PORT,
-    "0.0.0.0",
-    () => {
-
-        console.log(
-            "================================"
-        );
-
-        console.log(
-            "BiRefNet server started"
-        );
-
-        console.log(
-            "PORT:",
-            PORT
-        );
-
-        console.log(
-            "================================"
-        );
-
-        /*
-         * Start model loading after
-         * Railway has a listening port.
-         */
-
-        loadModel();
-
-    }
-);
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+    console.log(`🚀 API is running on http://localhost:${PORT}`);
+});
