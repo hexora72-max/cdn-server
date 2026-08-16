@@ -35,87 +35,162 @@ const upload = multer({
 ========================================================= */
 
 async function downloadModel() {
-    if (fs.existsSync(MODEL_PATH)) {
-        const stats = fs.statSync(MODEL_PATH);
 
-        if (stats.size > 100 * 1024 * 1024) {
+    if (fs.existsSync(MODEL_PATH)) {
+
+        const stats =
+            fs.statSync(MODEL_PATH);
+
+        if (
+            stats.size >
+            100 * 1024 * 1024
+        ) {
+
             console.log(
-                `BiRefNet model found: ${(stats.size / 1024 / 1024).toFixed(2)} MB`
+                "BiRefNet model already exists:",
+                (
+                    stats.size /
+                    1024 /
+                    1024
+                ).toFixed(2),
+                "MB"
             );
+
             return;
         }
 
-        console.log("Invalid/incomplete model found. Removing...");
-        fs.unlinkSync(MODEL_PATH);
+        console.log(
+            "Incomplete model found. Removing..."
+        );
+
+        fs.unlinkSync(
+            MODEL_PATH
+        );
     }
 
-    const tempPath = MODEL_PATH + ".tmp";
+    const tempPath =
+        MODEL_PATH + ".tmp";
 
     if (fs.existsSync(tempPath)) {
         fs.unlinkSync(tempPath);
     }
 
     console.log("");
-    console.log("========================================");
-    console.log("Downloading BiRefNet ONNX model...");
-    console.log("========================================");
+    console.log(
+        "======================================"
+    );
+    console.log(
+        "Downloading BiRefNet ONNX model..."
+    );
+    console.log(
+        "======================================"
+    );
     console.log("");
 
-    const response = await axios({
-        method: "GET",
-        url: MODEL_URL,
-        responseType: "stream",
-        timeout: 0,
-        maxContentLength: Infinity,
-        maxBodyLength: Infinity,
-        headers: {
-            "User-Agent": "Mozilla/5.0"
-        }
-    });
+    const response =
+        await axios({
+            method: "GET",
+            url: MODEL_URL,
+            responseType: "stream",
+            timeout: 0,
+            maxContentLength: Infinity,
+            maxBodyLength: Infinity,
+            headers: {
+                "User-Agent":
+                    "Mozilla/5.0"
+            }
+        });
 
     const total =
-        Number(response.headers["content-length"]) || 0;
+        Number(
+            response.headers[
+                "content-length"
+            ]
+        ) || 0;
 
     let downloaded = 0;
     let lastPercent = -1;
 
-    response.data.on("data", chunk => {
-        downloaded += chunk.length;
+    response.data.on(
+        "data",
+        chunk => {
 
-        if (total > 0) {
-            const percent = Math.floor(
-                (downloaded / total) * 100
-            );
+            downloaded +=
+                chunk.length;
 
-            if (percent !== lastPercent) {
-                lastPercent = percent;
+            if (total > 0) {
 
-                process.stdout.write(
-                    `\rModel download: ${percent}%`
-                );
+                const percent =
+                    Math.floor(
+                        (
+                            downloaded /
+                            total
+                        ) * 100
+                    );
+
+                if (
+                    percent !==
+                    lastPercent
+                ) {
+
+                    lastPercent =
+                        percent;
+
+                    process.stdout.write(
+                        `\rModel download: ${percent}%`
+                    );
+                }
             }
         }
-    });
+    );
 
-    const writer = fs.createWriteStream(tempPath);
+    const writer =
+        fs.createWriteStream(
+            tempPath
+        );
 
-    response.data.pipe(writer);
+    response.data.pipe(
+        writer
+    );
 
-    await new Promise((resolve, reject) => {
-        writer.on("finish", resolve);
-        writer.on("error", reject);
-        response.data.on("error", reject);
-    });
+    await new Promise(
+        (resolve, reject) => {
+
+            writer.on(
+                "finish",
+                resolve
+            );
+
+            writer.on(
+                "error",
+                reject
+            );
+
+            response.data.on(
+                "error",
+                reject
+            );
+        }
+    );
 
     console.log("");
 
-    const stats = fs.statSync(tempPath);
+    const stats =
+        fs.statSync(
+            tempPath
+        );
 
-    if (stats.size < 100 * 1024 * 1024) {
-        fs.unlinkSync(tempPath);
+    if (
+        stats.size <
+        100 * 1024 * 1024
+    ) {
+
+        fs.unlinkSync(
+            tempPath
+        );
 
         throw new Error(
-            "BiRefNet model download appears incomplete."
+            "BiRefNet model download is incomplete."
         );
     }
 
@@ -125,7 +200,17 @@ async function downloadModel() {
     );
 
     console.log(
-        `Model downloaded: ${(stats.size / 1024 / 1024).toFixed(2)} MB`
+        "Model downloaded successfully."
+    );
+
+    console.log(
+        "Model size:",
+        (
+            stats.size /
+            1024 /
+            1024
+        ).toFixed(2),
+        "MB"
     );
 }
 
@@ -135,35 +220,41 @@ async function downloadModel() {
 ========================================================= */
 
 async function loadModel() {
+
     await downloadModel();
 
-    console.log("");
-    console.log("Loading BiRefNet...");
+    console.log(
+        "Loading BiRefNet..."
+    );
 
     session =
         await ort.InferenceSession.create(
             MODEL_PATH,
             {
-                executionProviders: ["cpu"]
+                executionProviders: [
+                    "cpu"
+                ]
             }
         );
 
-    console.log("BiRefNet loaded successfully.");
+    console.log(
+        "BiRefNet loaded successfully."
+    );
 
     console.log(
-        "Input names:",
+        "Inputs:",
         session.inputNames
     );
 
     console.log(
-        "Output names:",
+        "Outputs:",
         session.outputNames
     );
 }
 
 
 /* =========================================================
-   IMAGE -> TENSOR
+   IMAGE TO TENSOR
 ========================================================= */
 
 function imageToTensor(
@@ -171,6 +262,7 @@ function imageToTensor(
     width,
     height
 ) {
+
     const size =
         width * height;
 
@@ -191,8 +283,14 @@ function imageToTensor(
         0.225
     ];
 
-    for (let i = 0; i < size; i++) {
-        const p = i * 3;
+    for (
+        let i = 0;
+        i < size;
+        i++
+    ) {
+
+        const p =
+            i * 3;
 
         const r =
             raw[p] / 255;
@@ -207,11 +305,15 @@ function imageToTensor(
             (r - mean[0]) /
             std[0];
 
-        data[size + i] =
+        data[
+            size + i
+        ] =
             (g - mean[1]) /
             std[1];
 
-        data[size * 2 + i] =
+        data[
+            size * 2 + i
+        ] =
             (b - mean[2]) /
             std[2];
     }
@@ -233,70 +335,78 @@ function imageToTensor(
    SIGMOID
 ========================================================= */
 
-function sigmoid(x) {
-    return 1 / (
-        1 + Math.exp(-x)
-    );
+function sigmoid(value) {
+
+    return 1 /
+        (
+            1 +
+            Math.exp(-value)
+        );
 }
 
 
 /* =========================================================
-   FIND MASK OUTPUT
+   GET MASK
 ========================================================= */
 
-function getMaskOutput(results) {
+function getMaskOutput(
+    results
+) {
+
     const names =
         session.outputNames;
 
     if (!names.length) {
         throw new Error(
-            "BiRefNet returned no output."
+            "BiRefNet returned no outputs."
         );
     }
 
-    let selected = null;
+    for (
+        const name of names
+    ) {
 
-    for (const name of names) {
         const tensor =
             results[name];
 
-        if (!tensor || !tensor.data) {
+        if (
+            !tensor ||
+            !tensor.data
+        ) {
             continue;
         }
 
         const dims =
             tensor.dims || [];
 
-        /*
-         * Prefer output shaped like:
-         *
-         * [1, 1, H, W]
-         */
-
         if (
             dims.length === 4 &&
             dims[0] === 1 &&
             dims[1] === 1
         ) {
-            selected = tensor;
-            break;
+
+            return tensor;
         }
     }
 
-    if (!selected) {
-        selected =
-            results[
-                names[names.length - 1]
-            ];
-    }
+    const last =
+        results[
+            names[
+                names.length - 1
+            ]
+        ];
 
-    if (!selected || !selected.data) {
+    if (
+        !last ||
+        !last.data
+    ) {
+
         throw new Error(
-            "Could not find BiRefNet mask output."
+            "Could not find mask output."
         );
     }
 
-    return selected;
+    return last;
 }
 
 
@@ -307,39 +417,34 @@ function getMaskOutput(results) {
 async function removeBackground(
     inputBuffer
 ) {
+
     if (!session) {
+
         throw new Error(
             "BiRefNet model is not loaded."
         );
     }
 
-    /*
-     * Get original dimensions
-     */
-
-    const originalMeta =
+    const metadata =
         await sharp(inputBuffer)
             .rotate()
             .metadata();
 
-    const originalWidth =
-        originalMeta.width;
+    const width =
+        metadata.width;
 
-    const originalHeight =
-        originalMeta.height;
+    const height =
+        metadata.height;
 
     if (
-        !originalWidth ||
-        !originalHeight
+        !width ||
+        !height
     ) {
+
         throw new Error(
             "Invalid image."
         );
     }
-
-    /*
-     * BiRefNet input
-     */
 
     const SIZE = 1024;
 
@@ -357,10 +462,6 @@ async function removeBackground(
             .raw()
             .toBuffer();
 
-    /*
-     * Convert image to tensor
-     */
-
     const tensor =
         imageToTensor(
             resized,
@@ -371,47 +472,49 @@ async function removeBackground(
     const inputName =
         session.inputNames[0];
 
-    /*
-     * Run model
-     */
-
     const results =
         await session.run({
-            [inputName]: tensor
+            [inputName]:
+                tensor
         });
 
-    /*
-     * Get segmentation mask
-     */
-
     const output =
-        getMaskOutput(results);
+        getMaskOutput(
+            results
+        );
+
+    console.log(
+        "Mask dimensions:",
+        output.dims
+    );
 
     const dims =
         output.dims || [];
 
-    console.log(
-        "Mask dimensions:",
-        dims
-    );
+    let maskWidth =
+        SIZE;
 
-    /*
-     * Determine mask dimensions
-     */
+    let maskHeight =
+        SIZE;
 
-    let maskWidth = SIZE;
-    let maskHeight = SIZE;
+    if (
+        dims.length >= 2
+    ) {
 
-    if (dims.length >= 2) {
         maskHeight =
-            dims[dims.length - 2];
+            dims[
+                dims.length - 2
+            ];
 
         maskWidth =
-            dims[dims.length - 1];
+            dims[
+                dims.length - 1
+            ];
     }
 
     const pixelCount =
-        maskWidth * maskHeight;
+        maskWidth *
+        maskHeight;
 
     const outputData =
         output.data;
@@ -420,14 +523,11 @@ async function removeBackground(
         outputData.length <
         pixelCount
     ) {
+
         throw new Error(
-            `Invalid mask output. Expected ${pixelCount} values, got ${outputData.length}.`
+            "Invalid BiRefNet mask output."
         );
     }
-
-    /*
-     * Create alpha mask
-     */
 
     const mask =
         Buffer.alloc(
@@ -439,21 +539,14 @@ async function removeBackground(
         i < pixelCount;
         i++
     ) {
+
         let value =
             Number(
                 outputData[i]
             );
 
-        /*
-         * BiRefNet output is generally logits.
-         */
-
         value =
             sigmoid(value);
-
-        /*
-         * Keep full soft mask.
-         */
 
         value =
             Math.max(
@@ -470,38 +563,32 @@ async function removeBackground(
             );
     }
 
-    /*
-     * Resize mask back to
-     * original image size.
-     */
-
     const maskBuffer =
         await sharp(
             mask,
             {
                 raw: {
-                    width: maskWidth,
-                    height: maskHeight,
+                    width:
+                        maskWidth,
+                    height:
+                        maskHeight,
                     channels: 1
                 }
             }
         )
             .resize(
-                originalWidth,
-                originalHeight,
+                width,
+                height,
                 {
                     fit: "fill",
-                    kernel: sharp
-                        .kernel
-                        .lanczos3
+                    kernel:
+                        sharp
+                            .kernel
+                            .lanczos3
                 }
             )
             .png()
             .toBuffer();
-
-    /*
-     * Add mask as alpha channel.
-     */
 
     const result =
         await sharp(inputBuffer)
@@ -511,10 +598,8 @@ async function removeBackground(
                 maskBuffer,
                 {
                     raw: {
-                        width:
-                            originalWidth,
-                        height:
-                            originalHeight,
+                        width,
+                        height,
                         channels: 1
                     }
                 }
@@ -527,7 +612,7 @@ async function removeBackground(
 
 
 /* =========================================================
-   HOME PAGE
+   HOME
 ========================================================= */
 
 app.get(
@@ -543,8 +628,10 @@ app.get(
 
 <meta charset="UTF-8">
 
-<meta name="viewport"
-      content="width=device-width,initial-scale=1">
+<meta
+    name="viewport"
+    content="width=device-width,initial-scale=1"
+>
 
 <title>
 BiRefNet Background Remover
@@ -560,7 +647,7 @@ body {
     margin: 0;
     padding: 30px;
     font-family: Arial, sans-serif;
-    background: #101010;
+    background: #111;
     color: white;
 }
 
@@ -570,7 +657,7 @@ body {
 }
 
 .card {
-    background: #1d1d1d;
+    background: #222;
     padding: 25px;
     border-radius: 18px;
 }
@@ -579,30 +666,29 @@ h1 {
     text-align: center;
 }
 
-input[type=file] {
+input {
     width: 100%;
     padding: 15px;
     margin-top: 20px;
-    background: #292929;
+    background: #333;
     color: white;
     border-radius: 10px;
 }
 
 button {
     width: 100%;
-    border: 0;
     padding: 15px;
     margin-top: 15px;
+    border: 0;
     border-radius: 10px;
     background: white;
     color: black;
     font-size: 16px;
     font-weight: bold;
-    cursor: pointer;
 }
 
 button:disabled {
-    opacity: .5;
+    opacity: 0.5;
 }
 
 #status {
@@ -613,17 +699,31 @@ button:disabled {
 #result {
     width: 100%;
     margin-top: 20px;
-    border-radius: 12px;
+    border-radius: 10px;
 
-    /*
-     * Checkerboard makes transparency visible.
-     */
+    background-color: white;
 
     background-image:
-        linear-gradient(45deg,#ccc 25%,transparent 25%),
-        linear-gradient(-45deg,#ccc 25%,transparent 25%),
-        linear-gradient(45deg,transparent 75%,#ccc 75%),
-        linear-gradient(-45deg,transparent 75%,#ccc 75%);
+        linear-gradient(
+            45deg,
+            #ccc 25%,
+            transparent 25%
+        ),
+        linear-gradient(
+            -45deg,
+            #ccc 25%,
+            transparent 25%
+        ),
+        linear-gradient(
+            45deg,
+            transparent 75%,
+            #ccc 75%
+        ),
+        linear-gradient(
+            -45deg,
+            transparent 75%,
+            #ccc 75%
+        );
 
     background-size: 20px 20px;
 
@@ -637,8 +737,8 @@ button:disabled {
 #download {
     display: block;
     text-align: center;
+    padding: 15px;
     margin-top: 20px;
-    padding: 14px;
     border-radius: 10px;
     background: white;
     color: black;
@@ -665,7 +765,7 @@ BiRefNet
 </h1>
 
 <p>
-Upload an image and remove its background.
+Remove image background automatically.
 </p>
 
 <form id="form">
@@ -710,22 +810,34 @@ Download PNG
 <script>
 
 const form =
-    document.getElementById("form");
+    document.getElementById(
+        "form"
+    );
 
 const input =
-    document.getElementById("image");
+    document.getElementById(
+        "image"
+    );
 
 const button =
-    document.getElementById("button");
+    document.getElementById(
+        "button"
+    );
 
 const status =
-    document.getElementById("status");
+    document.getElementById(
+        "status"
+    );
 
 const result =
-    document.getElementById("result");
+    document.getElementById(
+        "result"
+    );
 
 const download =
-    document.getElementById("download");
+    document.getElementById(
+        "download"
+    );
 
 form.addEventListener(
     "submit",
@@ -740,7 +852,8 @@ form.addEventListener(
             return;
         }
 
-        button.disabled = true;
+        button.disabled =
+            true;
 
         result.classList.add(
             "hidden"
@@ -767,17 +880,18 @@ form.addEventListener(
                 await fetch(
                     "/remove-bg",
                     {
-                        method: "POST",
-                        body: formData
+                        method:
+                            "POST",
+                        body:
+                            formData
                     }
                 );
 
             if (!response.ok) {
 
-                const text =
-                    await response.text();
-
-                throw new Error(text);
+                throw new Error(
+                    await response.text()
+                );
             }
 
             const blob =
@@ -788,13 +902,15 @@ form.addEventListener(
                     blob
                 );
 
-            result.src = url;
+            result.src =
+                url;
 
             result.classList.remove(
                 "hidden"
             );
 
-            download.href = url;
+            download.href =
+                url;
 
             download.classList.remove(
                 "hidden"
@@ -811,10 +927,9 @@ form.addEventListener(
 
         } finally {
 
-            button.disabled = false;
-
+            button.disabled =
+                false;
         }
-
     }
 );
 
@@ -829,7 +944,7 @@ form.addEventListener(
 
 
 /* =========================================================
-   IMAGE UPLOAD API
+   UPLOAD API
 ========================================================= */
 
 app.post(
@@ -879,7 +994,7 @@ app.post(
         } catch (error) {
 
             console.error(
-                "Remove background error:",
+                "Background removal error:",
                 error
             );
 
@@ -894,13 +1009,15 @@ app.post(
 
             if (
                 inputPath &&
-                fs.existsSync(inputPath)
+                fs.existsSync(
+                    inputPath
+                )
             ) {
+
                 fs.unlinkSync(
                     inputPath
                 );
             }
-
         }
     }
 );
@@ -923,8 +1040,8 @@ app.post(
 
         try {
 
-            const { url } =
-                req.body;
+            const url =
+                req.body.url;
 
             if (!url) {
 
@@ -937,8 +1054,13 @@ app.post(
                     });
             }
 
+            /*
+             * Correct regex:
+             * /^https?:\/\//i
+             */
+
             if (
-                !/^https?:\\/\\//i.test(
+                !/^https?:\/\//i.test(
                     url
                 )
             ) {
@@ -997,7 +1119,7 @@ app.post(
         } catch (error) {
 
             console.error(
-                "URL processing error:",
+                "URL background removal error:",
                 error
             );
 
@@ -1014,7 +1136,7 @@ app.post(
 
 
 /* =========================================================
-   HEALTH CHECK
+   HEALTH
 ========================================================= */
 
 app.get(
@@ -1032,7 +1154,7 @@ app.get(
 
 
 /* =========================================================
-   START SERVER
+   START
 ========================================================= */
 
 async function start() {
@@ -1040,7 +1162,7 @@ async function start() {
     try {
 
         console.log(
-            "Starting BiRefNet server..."
+            "Starting BiRefNet..."
         );
 
         await loadModel();
@@ -1060,23 +1182,24 @@ async function start() {
                 );
 
                 console.log(
-                    "BiRefNet background remover ready."
+                    "Background remover is ready."
                 );
 
                 console.log(
                     "================================"
                 );
-
             }
         );
 
     } catch (error) {
 
-        console.error("");
         console.error(
             "Failed to start:"
         );
-        console.error(error);
+
+        console.error(
+            error
+        );
 
         process.exit(1);
     }
